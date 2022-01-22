@@ -3,7 +3,7 @@ title: Modeling
 author: Daniel Anderson
 output: 
   rmdformats::downcute:
-    code_folding: hide
+    code_folding: true
 ---
 
 ```{r include = FALSE}
@@ -81,7 +81,7 @@ d |>
 # Modeling
 
 ## Unconditional growth model
-Below I fit a linear model and a cubic model and compare the fit. The cubic model clearly fits better.
+I started out by fittin a linear model 
 
 ```{r}
 m0 <- lmer(
@@ -91,7 +91,10 @@ m0 <- lmer(
   control = lmerControl(optimizer = "bobyqa"),
   REML = FALSE
 )
+```
 
+I then compared the fit of this model with a curvillinear cubic model.
+```{r}
 m01 <- lmer(
   rit_tot ~ poly(wave, 3) +
     (wave | ssid) + (wave | schid),
@@ -102,10 +105,150 @@ m01 <- lmer(
 
 # polynomial model clearly fits better, unsurprisingly
 anova(m0, m01)
+
+summary(m01)
+```
+
+The cubic model clearly fits better, so we'll go forward with that. This model only allows the linear piece to randomly vary across schools. I don't think it's worth trying to model the bends in the curve as randomly varying.
+
+
+We might interpret this model with something like:
+
+> The curvillinear cubic model clearly fit the data better than the linear model (cite stats). We allowed the intercept and the linear piece of the growth model to vary randomly across both students and schools. This models different starting points (initial achievment) for students and schools (average initial achievement), as well as different trajectories for each student and average trajectories for each school. However, because we did not allow the curvillinear parts to vary randomly, the functional form of the growth (bends in the curve) was common across students and schools.
+
+> The coefficients, outside of the intercept, are difficult to interpret because of the orthogonal polynomial coding, but as Figure 1 makes evident, students made rapid initial growth, which then slowed around Grades 5 to 6, and there is some evidence of a slight uptick in growth again at Grade 7. Both the intercept and the linear portion of the growth curve varied considerably between students and schools. Students scored, on average, 2489.59 points on the Grade 3 statewide mathematics test (their initial achievment), which varied between students with a standard deviation of nearly 69 points. This represents approximately 0.87 standard deviations on the Grade 3 test scale. In other words, a student whose initial achivement was 1 standard deviation below the norm would score nearly 1.75 standard deviations below a student whose score was 1 standard deviation above the norm. The between-school variability was also considerable, though much smaller than the between-student variation. Students initial achievment varied between schools with a standard deviation of 26.45 points. The linear portion of the growth curve also varied considerably at both levels, with the slope varying between-student with a standard deviation of 14.58 and between schools with a standard deviation of 10.23 points.
+
+
+I can make the plot prettier, but a draft is below. I'm also not positive what plots we'll end up wanting to include. I also am not sure this is the best plot to show the curvilinearity
+
+```{r}
+set.seed(123)
+students <- sample(unique(m01@frame$ssid), 500)
+stu_pred <- d |>
+  filter(ssid %in% students)
+
+stu_pred <- stu_pred |>
+  mutate(pred = predict(m01, newdata = stu_pred))
+
+fixef_pred <- tibble(
+  wave = 0:4,
+  ssid = -999,
+  schid = -999
+)
+fixef_pred <- fixef_pred |>
+  mutate(pred = predict(m01, newdata = fixef_pred, allow.new.levels = TRUE))
+
+ggplot(stu_pred, aes(grade, pred)) +
+  geom_line(
+    aes(group = ssid),
+    alpha = 0.6,
+    size = 0.1
+  ) +
+  geom_line(
+    aes(x = wave + 3),
+    fixef_pred,
+    color = "magenta",
+    size = 1.5
+  ) +
+  geom_point(
+    aes(x = wave + 3),
+    fixef_pred,
+    size = 3
+  ) +
+  labs(
+    x = "Grade",
+    y = "Model-predicted score",
+    caption = "Average modeled growth overlaid on a random sample of 500 student growth trajectories"
+  )
+```
+
+Below is another probably better plot that shows the same thing but with 100 school trajectories overlaid instead.
+
+```{r}
+schools <- sample(unique(m01@frame$schid), 100)
+
+sch_only <- expand.grid(
+  schid = schools,
+  ssid = -999,
+  wave = 0:4
+)
+
+sch_only <- sch_only |>
+  mutate(pred = predict(m01, newdata = sch_only, allow.new.levels = TRUE))
+
+ggplot(sch_only, aes(wave + 3, pred)) +
+  geom_line(
+    aes(group = schid),
+    alpha = 0.4
+  ) +
+  geom_line(
+    aes(x = wave + 3),
+    fixef_pred,
+    color = "magenta",
+    size = 1.5
+  ) +
+    geom_point(
+      aes(x = wave + 3),
+      fixef_pred,
+      size = 3
+    ) +
+    labs(
+      x = "Grade",
+      y = "Model-predicted score",
+      caption = "Average modeled growth overlaid on a random sample of 100 average school growth trajectories"
+    )
+```
+
+And one more possible one, although this one definitely needs some work. We could get a sample of schools and show the variation in growth trajectories for those schools. I should probably cutoff the prediction when there's no data in that range.
+
+```{r}
+schls <- d |>
+  count(schid, grade) |>
+  count(schid) |>
+  filter(n > 1)
+
+schls <- d |>
+  filter(schid %in% schls$schid) |>
+  count(schid, ssid) |>
+  count(schid, sort = TRUE) |>
+  slice(c(2, seq(50, 400, 50))) |>
+  pull(schid)
+
+schl_sample <- d |>
+  filter(schid %in% schls & ssid %in% m01@frame$ssid)
+
+schl_sample$pred <- predict(m01, newdata = schl_sample)
+schl_preds <- expand.grid(
+  schid = schls,
+  ssid = -999,
+  wave = 0:4
+)
+schl_preds$pred <- predict(m01, newdata = schl_preds, allow.new.levels = TRUE)
+
+ggplot(schl_sample, aes(grade, pred)) +
+  geom_line(
+    aes(group = ssid),
+    size = 0.3,
+    alpha = 0.8,
+    color = "gray70"
+  ) +
+  geom_line(
+    aes(x = wave + 3),
+    color = "magenta",
+    size = 1.3,
+    data = schl_preds
+  ) +
+  geom_point(
+    aes(x = wave + 3),
+    color = "#2d3035",
+    size = 1.3,
+    data = schl_preds
+  ) +
+  facet_wrap(~schid)
 ```
 
 ## Economically-based achievement disparities
-I first modeled the average disparity, then allowed that disparity to vary by grade. The model that allowed the disparity to vary between schools clearly fit the data better than the model that included only the mean difference, and both models clearly fit better than the unconditional growth model. 
+I first modeled the average disparity, then allowed that disparity to vary by school. The model that allowed the disparity to vary between schools clearly fit the data better than the model that included only the mean difference, and both models clearly fit better than the unconditional growth model. 
 
 ### Average disparity
 ```{r}
@@ -137,10 +280,10 @@ summary(m2)
 
 This model can be used to address RQ1. We might say something like:
 
-> Students classified by the Oregon Department of Education as "economically disadvantaged" scored approximately 56 points lower on the statewide assessment than their peers who were not classified. This represents approximately 0.70 standard deviations on the mathematics statewide test in Grade 3, and 0.47 standard deviations on the Grade 7 statewide test. This mean difference, however, varied considerably between schools with a standard deviation of 14.47. In other words, the achievement disparity in a school one standard deviation above the mean would be 70 points different, while a school one standard deviation below the mean would be approximately 42 points (the difference between the achievement of these students being roughly half a standard deviation below their peers as opposed to 0.89 standard deviations below, at Grade 3). This was consistent with our hypothesis.
+> Students classified by the Oregon Department of Education as "economically disadvantaged" scored approximately 56 points lower on the statewide assessment than their peers who were not classified. This represents approximately 0.70 standard deviations on the mathematics statewide test in Grade 3, and 0.47 standard deviations on the Grade 7 statewide test. This mean difference, however, varied considerably between schools with a standard deviation of 14.47. The achievement disparity in a school one standard deviation above the mean would therefore be approximately 70 points, while a school one standard deviation below the mean would be approximately 42 points (roughly half a standard deviation difference versus 0.89 standard deviations difference, at Grade 3). This was consistent with our hypothesis.
 
 
-Below the effect-size like metrics I reference from above.
+Below are the effect-size like metrics I reference from above.
 
 ```{r}
 d |>
@@ -171,7 +314,7 @@ We see again that the model including this interaction clearly fits better. Howe
 
 ```{r}
 m3b <- lmer(
-  rit_tot ~ poly(wave, 3) * econ_dis_stable + 
+  rit_tot ~ poly(wave, 3) * econ_dis_stable +
     (wave | ssid) + (wave + econ_dis_stable | schid),
   data = d,
   control = lmerControl(optimizer = "nlminbwrap"),
@@ -180,7 +323,7 @@ m3b <- lmer(
 anova(m3, m3b)
 ```
 
-The model including the interaction on the curvillinear pieces fits better, so we'll go forward with that. 
+and we see that it does. So it's not only the slope, but also the functional form (bends in the curve) that depend on economic disadvantaged status. We'll go forward with this model. 
 
 ```{r}
 summary(m3b)
@@ -188,9 +331,9 @@ summary(m3b)
 
 We also see that the disparity grows over time, but because of the non-linearity it's sort of difficult to interpret directly. We can use this to address RQ2, however, and we might say something like
 
-> Students classified as economically disadvantaged gained progressed at a slower rate than student who were not similarly classified. Figure 1 displays the average growth (not accounting for any between-school variation) for each student group. As can be seen, the disparity grows over time. At Grade 3, the predicted difference between these groups was approximately 52.25 points, which grew to 75.77 points by Grade 7. However, the variation in scores also increased with time, and these values represent roughly equivalent effect sizes for the corresponding grade (0.66 standard deviations in Grade 3 and 0.63 standard deviations in Grade 7). 
+> Students classified as economically disadvantaged progressed at a slower rate than student who were not similarly classified. Figure 2 displays the average growth (not accounting for any between-school variation) for each student group. As can be seen, the disparity grows over time. At Grade 3, the predicted difference between these groups was approximately 52.25 points, which grew to 75.77 points by Grade 7. However, the variation in scores also increased with time, and these values represent roughly equivalent effect sizes for the corresponding grade (0.66 standard deviations in Grade 3 and 0.63 standard deviations in Grade 7). 
 
-I can make the plot prettier, of course, but a start of a draft is below.
+I can make the plot prettier, of course, but a draft is below.
 ```{r}
 pred_frame <- expand.grid(
   wave = 0:4,
@@ -273,5 +416,70 @@ anova(m4, m5)
 
 And as we would expect, this model actually does fit better.
 ```{r}
-
+summary(m5)
 ```
+
+Our coefficient states that a one standard deviation increase days absent corresponds to a 5.3 point decrease in students expected scores. We can translate this into a more meaningful metric by dividing the coefficient by the standard deviation of the raw days absent variable, which will put it on the unstandardized scale. This corresponds to
+
+```{r}
+fixef(m5)["days_absent_z"] / sd(d$days_absent)
+```
+
+which implies that a one *day* increase corresponds to an expected decrease in test scores of 0.67 points. So if we want to translate this into our weekly (5 days) value, we can just multiply it by 5. 
+
+```{r}
+(fixef(m5)["days_absent_z"] / sd(d$days_absent)) * 5
+```
+
+And we see that this corresponds to an expected 3.36 point decrease. 
+
+## RQ 3
+Our third reserach question corresponds to differences in absenteeism rates between schools for students who are and are not classified as economically disadvantaged. This implies modeling the interaction between days absent and economic disadvantaged status, and then allowing those coefficients to randomly vary between schools.
+
+Initially, I was planning to just extend the previous models, but I'm now realizing that won't actually address the research question becuase that would correspond to variability in the effect of absenteeism on achievement, rather than variability in absenteeism rates. To actually address our research question, we'll need to fit a model with absenteeism as the outcome.
+
+Let's look at the distribution of absenteeism to see if we need to model it as a count distribution or if we can get away with assuming a gaussian distribution.
+
+```{r}
+ggplot(d, aes(days_absent)) +
+  geom_histogram(bins = 50)
+```
+
+Well... it seems to be pretty classically following the count distribution, so we'll need to go with that. Because we have non-integer data though, I'll model it assuming a Gamma distribution.
+
+We'll start by modeling just the between-student and between-school variability in absenteeism.
+
+```{r}
+m0_abs <- glmer(
+  days_absent + 1 ~ 1 +
+    (1 | ssid) + (1 | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(optimizer = "Nelder_Mead")
+)
+
+summary(m0_abs)
+```
+
+This model indicates that students were absent, on average, about $exp(1.99) = `r exp(1.99)`$ days per year. This varied *a lot* between students. A student one standard deviation below the mean would be expected to miss $exp(1.99 - 0.496) = `r exp(1.99 - 0.496)`$ days, while a student one standard deviation above the mean would be expected to be absent $exp(1.99 + 0.496) = `r exp(1.99 + 0.496)`$ days. At the school level, there was still pretty considerable variation but, as I think we would expect, not as much as at the individual level. The absenteeism rates in a school one standard deviation below the mean would be expected to average $exp(1.99 - 0.144) = `r exp(1.99 - 0.144)`$, whereas a school one standard deviation above would be expected to average $exp(1.99 + 0.144) = `r exp(1.99 + 0.144)`$ days absent.
+
+Next let's see how this varies by economically disadvantaged status.
+
+```{r}
+m1_abs <- glmer(
+  days_absent + 1 ~ econ_dis_stable +
+    (1 | ssid) + (1 | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(optimizer = "Nelder_Mead")
+)
+
+m2_abs <- glmer(
+  days_absent + 1 ~ econ_dis_stable +
+    (1 | ssid) + (econ_dis_stable | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(optimizer = "Nelder_Mead")
+)
+```
+
