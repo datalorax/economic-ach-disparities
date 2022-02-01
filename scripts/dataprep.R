@@ -82,16 +82,6 @@ coh_a_mth <- semi_join(coh_a_mth, low_prop)
 1 - (nrow(coh_a_mth) / b)
 # Proportion: 0.04518504
 
-coh_a_mth |>
-  group_by(grade) |>
-  summarize(score = mean(rit_tot, na.rm = TRUE)) |>
-  ggplot(aes(grade, score)) +
-  geom_point() +
-  geom_smooth(method = "lm", color = "pink", se = FALSE) +
-  geom_smooth(method = "lm", color = "orange", formula = y ~ poly(x, 2), se = FALSE) +
-  geom_smooth(method = "lm", formula = y ~ poly(x, 3), se = FALSE)
-
-# cubic trend looks promising
 
 # Compute variables
 coh_a_mth <- coh_a_mth |>
