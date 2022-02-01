@@ -1,9 +1,7 @@
 ---
 title: Modeling
 author: Daniel Anderson
-output: 
-  rmdformats::downcute:
-    code_folding: true
+output: rmdformats::downcute
 ---
 
 ```{r include = FALSE}
@@ -383,58 +381,11 @@ ggplot(means, aes(grade, score)) +
   theme(legend.position = "bottom")
 ```
 
-## Absenteeism
-
-When adding absenteeism to the model, I followed a similar process as with economic disadvantaged status. This included first adding it as a main effect, then allowing it to vary randomly between schools, then investigating interactions. However, as I mentioned in our meeting on 01/20/2022, Oregon has fairly considerable variation in the number of days schools are open across districts. I therefore started by including this variable (number of days in the school year) as a (standardized) control variable.
-
-```{r}
-m4 <- lmer(
-  rit_tot ~ poly(wave, 3) * econ_dis_stable + sy_days_z +
-    (wave | ssid) + (wave + econ_dis_stable | schid),
-  data = d,
-  control = lmerControl(optimizer = "nlminbwrap"),
-  REML = FALSE
-)
-anova(m4, m3b)
-```
-
-The fit of the model is essentially equivalent. We could opt for parsimony here but I'll keep it in there becuase I think it's an important control variable for the next step, which is adding in the number of days absent.
-
-In my preliminary modeling, I tried to do what I discussed in the pre-registration, which is standardize it so it has a mean of zero and a standard devaition of 1, but the one standard deviation increase would represent a 5 day increase in days abent (one week). This ended up not working. I got warnings from lme4 about predictors being on very different scales. So I just ended up going with a standard scaling, and we can convert it back to the raw scale to make sense of it, as I'll illustrate below.
-
-```{r}
-m5 <- lmer(
-  rit_tot ~ poly(wave, 3) * econ_dis_stable +
-    sy_days_z + days_absent_z +
-    (wave | ssid) + (wave + econ_dis_stable | schid),
-  data = d,
-  control = lmerControl(optimizer = "nlminbwrap"),
-  REML = FALSE
-)
-anova(m4, m5)
-```
-
-And as we would expect, this model actually does fit better.
-```{r}
-summary(m5)
-```
-
-Our coefficient states that a one standard deviation increase days absent corresponds to a 5.3 point decrease in students expected scores. We can translate this into a more meaningful metric by dividing the coefficient by the standard deviation of the raw days absent variable, which will put it on the unstandardized scale. This corresponds to
-
-```{r}
-fixef(m5)["days_absent_z"] / sd(d$days_absent)
-```
-
-which implies that a one *day* increase corresponds to an expected decrease in test scores of 0.67 points. So if we want to translate this into our weekly (5 days) value, we can just multiply it by 5. 
-
-```{r}
-(fixef(m5)["days_absent_z"] / sd(d$days_absent)) * 5
-```
-
-And we see that this corresponds to an expected 3.36 point decrease. 
 
 ## RQ 3
-Our third reserach question corresponds to differences in absenteeism rates between schools for students who are and are not classified as economically disadvantaged. This implies modeling the interaction between days absent and economic disadvantaged status, and then allowing those coefficients to randomly vary between schools.
+Our third reserach question corresponds to differences in absenteeism rates between schools for students who are and are not classified as economically disadvantaged. This implies fitting similar models to those above, but with absenteeism as the outcome. We can then include economic disadvataged as a predictor variable and see how it varies between schools. We'll still want to account for the "growth" in days absent over grades that we see with
+
+the interaction between days absent and economic disadvantaged status, and then allowing those coefficients to randomly vary between schools.
 
 Initially, I was planning to just extend the previous models, but I'm now realizing that won't actually address the research question becuase that would correspond to variability in the effect of absenteeism on achievement, rather than variability in absenteeism rates. To actually address our research question, we'll need to fit a model with absenteeism as the outcome.
 
@@ -463,23 +414,145 @@ summary(m0_abs)
 
 This model indicates that students were absent, on average, about $exp(1.99) = `r exp(1.99)`$ days per year. This varied *a lot* between students. A student one standard deviation below the mean would be expected to miss $exp(1.99 - 0.496) = `r exp(1.99 - 0.496)`$ days, while a student one standard deviation above the mean would be expected to be absent $exp(1.99 + 0.496) = `r exp(1.99 + 0.496)`$ days. At the school level, there was still pretty considerable variation but, as I think we would expect, not as much as at the individual level. The absenteeism rates in a school one standard deviation below the mean would be expected to average $exp(1.99 - 0.144) = `r exp(1.99 - 0.144)`$, whereas a school one standard deviation above would be expected to average $exp(1.99 + 0.144) = `r exp(1.99 + 0.144)`$ days absent.
 
-Next let's see how this varies by economically disadvantaged status.
+Let's move on by modeling the trend over time. We'll fit another unconditional "growth" model with the effect of time (`wave`) randomly varying between students and schools.
 
 ```{r}
 m1_abs <- glmer(
-  days_absent + 1 ~ econ_dis_stable +
-    (1 | ssid) + (1 | schid),
+  days_absent + 1 ~ wave +
+    (wave | ssid) + (wave | schid),
   data = d,
   family = Gamma(link = "log"),
-  control = glmerControl(optimizer = "Nelder_Mead")
+  control = glmerControl(optimizer = "nlminbwrap")
 )
-
-m2_abs <- glmer(
-  days_absent + 1 ~ econ_dis_stable +
-    (1 | ssid) + (econ_dis_stable | schid),
-  data = d,
-  family = Gamma(link = "log"),
-  control = glmerControl(optimizer = "Nelder_Mead")
-)
+summary(m1_abs)
 ```
 
+
+This model indicates that students in Grade 3 were absent, on average, `r exp(1.822962)` days, which varied between students with a standard deviation of `r exp(0.346113)` days and between schools with a standard deviation of `r exp(0.028173)` days. Students were absent an additional `r exp(0.052065)` days, on average, with each yearly increase in grade. This rate of "growth" in absenteeism varied between students with a standard deviation of `r exp(0.039909)` days, and between schools with a standard deviation of `r exp(0.004109)`. There was therefore considerable variability in the rate of change in absenteeism between both students and schools, with the standard deviations being almost as large as the mean.
+
+However, this model also assumes linearity. Let's visualize that quickly to see if a non-linear model might be a better option.
+
+```{r}
+d |>
+  group_by(grade) |>
+  summarize(mean_absenteeism = mean(days_absent, na.rm = TRUE))
+
+d |>
+  group_by(grade) |>
+  summarize(mean_absenteeism = mean(days_absent, na.rm = TRUE)) |>
+  ggplot(aes(grade, mean_absenteeism)) +
+    geom_smooth(
+      method = "lm",
+      color = "pink",
+      se = FALSE
+    ) +
+      geom_smooth(
+        method = "lm",
+        color = "orange",
+        formula = y ~ poly(x, 2),
+        se = FALSE
+      ) +
+      geom_smooth(
+        method = "lm",
+        formula = y ~ poly(x, 3),
+        se = FALSE
+      ) +
+      geom_point(size = 3)
+```
+
+In this case, it's looking decidedly non-linear, but it also appears a quadratic slope may adequately describe the relation. Let's try both and just make sure that the quadratic does fit better than the linear, but not better than a cubic.
+
+```{r}
+m1b_abs <- glmer(
+  days_absent + 1 ~ poly(wave, 2) +
+    (wave | ssid) + (wave | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(
+    optimizer = "nloptwrap",
+    optCtrl = list(algorithm = "NLOPT_LN_BOBYQA")
+  )
+)
+anova(m1_abs, m1b_abs)
+```
+
+And actually, surprisingly to me anyway, even the quadratic is not fitting any better, so we'll stick with the linear fit.
+
+Next let's see how this varies by economically disadvantaged status. First, we'll model the average initial difference.
+
+```{r}
+m2_abs <- glmer(
+  days_absent + 1 ~ wave + econ_dis_stable +
+    (wave | ssid) + (wave | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(optimizer = "nmkbw")
+)
+summary(m2_abs)
+```
+
+We see a pretty big differential, with students who are classified in the economic disadvantaged category being absent `r round(exp(0.162287), 2)` more days, on average. Let's see if this this differential changes over time.
+
+```{r}
+m3_abs <- glmer(
+  days_absent + 1 ~ wave * econ_dis_stable +
+    (wave | ssid) + (wave | schid),
+  data = d,
+  family = Gamma(link = "log"),
+  control = glmerControl(optimizer = "nmkbw")
+)
+summary(m3_abs)
+```
+
+
+## Absenteeism as a moderator
+
+### Hasn't been updated
+
+When adding absenteeism to the model, I followed a similar process as with economic disadvantaged status. This included first adding it as a main effect, then allowing it to vary randomly between schools, then investigating interactions. However, as I mentioned in our meeting on 01/20/2022, Oregon has fairly considerable variation in the number of days schools are open across districts. I therefore started by including this variable (number of days in the school year) as a (standardized) control variable.
+
+```{r eval = FALSE}
+m4 <- lmer(
+  rit_tot ~ poly(wave, 3) * econ_dis_stable + sy_days_z +
+    (wave | ssid) + (wave + econ_dis_stable | schid),
+  data = d,
+  control = lmerControl(optimizer = "nlminbwrap"),
+  REML = FALSE
+)
+anova(m4, m3b)
+```
+
+The fit of the model is essentially equivalent. We could opt for parsimony here but I'll keep it in there becuase I think it's an important control variable for the next step, which is adding in the number of days absent.
+
+In my preliminary modeling, I tried to do what I discussed in the pre-registration, which is standardize it so it has a mean of zero and a standard devaition of 1, but the one standard deviation increase would represent a 5 day increase in days abent (one week). This ended up not working. I got warnings from lme4 about predictors being on very different scales. So I just ended up going with a standard scaling, and we can convert it back to the raw scale to make sense of it, as I'll illustrate below.
+
+```{r eval = FALSE}
+m5 <- lmer(
+  rit_tot ~ poly(wave, 3) * econ_dis_stable +
+    sy_days_z + days_absent_z +
+    (wave | ssid) + (wave + econ_dis_stable | schid),
+  data = d,
+  control = lmerControl(optimizer = "nlminbwrap"),
+  REML = FALSE
+)
+anova(m4, m5)
+```
+
+And as we would expect, this model actually does fit better.
+```{r eval = FALSE}
+summary(m5)
+```
+
+Our coefficient states that a one standard deviation increase days absent corresponds to a 5.3 point decrease in students expected scores. We can translate this into a more meaningful metric by dividing the coefficient by the standard deviation of the raw days absent variable, which will put it on the unstandardized scale. This corresponds to
+
+```{r eval = FALSE}
+fixef(m5)["days_absent_z"] / sd(d$days_absent)
+```
+
+which implies that a one *day* increase corresponds to an expected decrease in test scores of 0.67 points. So if we want to translate this into our weekly (5 days) value, we can just multiply it by 5. 
+
+```{r eval = FALSE}
+(fixef(m5)["days_absent_z"] / sd(d$days_absent)) * 5
+```
+
+And we see that this corresponds to an expected 3.36 point decrease. 
